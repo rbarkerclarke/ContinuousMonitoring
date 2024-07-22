@@ -4,6 +4,10 @@ format: html
 editor: visual
 ---
 
+```{r}
+library(tidyverse)
+```
+
 ## Sotera Visi Analysis
 
 Continuous Heart Rate and SPO2 Monitoring in post-surgical patients
@@ -34,15 +38,184 @@ jama_p=read_csv("./data_request_20240423/primary_outcomes_jama_revision.csv")
 jama_s =read_csv("./data_request_20240423/secondary_outcomes_20190211.csv")
 ```
 
-Pull only data with patient ID
+
+
+Subset data into continuous (visi) and nurse observations
 
 ```{r}
-monitoring_na = monitoring %>% filter(is.na(Study.ID))
+monitor_n = monitoring |> filter(!is.na(BP_SYS)) %>% select(-CNIBP_SYS, -CNIBP_DIA, -CNIBP_MAP) 
+monitor_v = monitoring |> filter(is.na(BP_SYS)) %>% select(-BP_SYS, -BP_DIA, -BP_MAP) %>% mutate(time = as_datetime(dev_reading_tm, format = "%d%b%Y:%H:%M:%S"))
 ```
 
-Subset data into continuous and nurse
+```{r}
+sotera_summary = monitor_v %>% filter(Study.ID!="") %>% group_by(Study.ID) %>% 
+  summarise(as_tibble_row(quantile(SPO2, na.rm = TRUE), .name_repair=\(x) paste0('o2_q', parse_number(x))), 
+            as_tibble_row(quantile(PR, na.rm=TRUE), .name_repair=\(x) paste0('PR_q', parse_number(x))),
+            as_tibble_row(quantile(CNIBP_MAP, na.rm=TRUE), .name_repair=\(x) paste0('MAP_q', parse_number(x))),
+            stay = max(time)-min(time))
+            
+nurse_summary = monitor_n  %>% filter(Study.ID!="") %>% group_by(Study.ID) %>% 
+  summarise(mino2=min(SPO2), maxo2=max(SPO2), 
+            minHR=min(PR), maxHR=max(PR), 
+            minMAP=min(BP_MAP), maxMAP=max(BP_MAP),
+            visits=n())
+
+patient_summary = left_join(sotera_summary, nurse_summary)
+patient_summary$randomization_number = as.integer(str_replace_all(patient_summary$Study.ID,'-',''))
+
+patient_summary = left_join(patient_summary, baseline)
+```
+```{r}
+intra_op_specific = intra_op %>% select(randomization_number,`Duration of surgery (hours)`, pacu_los_hr, `Type of Surgery`)
+
+patient_summary <- left_join(patient_summary, intra_op_specific)
+```
 
 ```{r}
-monitor_n = monitoring |> filter(!is.na(BP_SYS)) 
-monitor_v = monitoring |> filter(is.na(BP_SYS)) 
+patient_summary$o2_outlier = patient_summary$o2_q25-1.5*(patient_summary$o2_q75-patient_summary$o2_q25)
+
+patient_summary$map_outlier = patient_summary$MAP_q25-1.5*(patient_summary$MAP_q75-patient_summary$MAP_q25)
+```
+
+```{r}
+patient_summary$BMIHIGH=patient_summary$bmi>30
+patient_summary$stay_hrs = patient_summary$stay/3600
+```
+
+```{r}
+# Add empiric p-value difference
+
+ggplot(data=patient_summary %>% filter(!is.na(mino2), !is.na(smoking_status))) + 
+    geom_point( aes(x=o2_q0, y=mino2, col="Q0"))+ 
+    geom_smooth(aes(x=o2_q0, y=mino2, col="Q0"), method = "lm")+
+    geom_point( aes(x=o2_q25, y=mino2, col="Q25")) + 
+    geom_smooth(aes(x=o2_q25, y=mino2, col="Q25"), method = "lm") + 
+    facet_wrap("BMIHIGH")+
+    xlab("Saturation Oxygen (Visi)") + ylab("Minimum Oxygen (Nurse)")
+  
+ggplot(data=patient_summary %>% filter(!is.na(minHR)))+
+    geom_point(aes(x=PR_q0, y=minHR, col="Q0")) +
+    geom_smooth(aes(x=PR_q0, y=minHR, col="Q0"), method = "lm")+
+    geom_point( aes(x=PR_q25, y=minHR, col="Q25")) +  
+    geom_smooth(aes(x=PR_q25, y=minHR, col="Q25"), method = "lm") + 
+  facet_wrap("BMIHIGH")+ 
+  xlab("PR (Visi)") + ylab("Minimum HR (Nurse)")
+
+ggplot(data=patient_summary %>% filter(!is.na(minMAP), minMAP!=0))+
+    geom_point(aes(x=MAP_q0, y=minMAP, col="Q0")) +
+      geom_smooth(aes(x=MAP_q0, y=minMAP, col="Q0"), method = "lm") + 
+      geom_point(aes(x=MAP_q25, y=minMAP, col="Q25")) +
+      geom_smooth(aes(x=MAP_q25, y=minMAP, col="Q25"), method = "lm") + 
+  facet_wrap("BMIHIGH")+ 
+  xlab("MAP (Visi)") + ylab("Minimum MAP (Nurse)")#+ geom_abline(slope=1) 
+
+```
+
+```{r}
+ggplot(data=patient_summary %>% filter(!is.na(smoking_status))) + geom_boxplot(aes(y=o2_q0, x=as.factor(smoking_status))) + xlab("Smoking Status") + ylab("Minimum Oxygenation (Continuous)")
+
+kruskal.test(patient_summary$o2_q25, patient_summary$smoking_status)
+```
+
+```{r}
+ggplot(data=patient_summary %>% filter(!is.na(asthma))) + geom_boxplot(aes(y=MAP_q0, x=as.factor(asthma))) + xlab("Asthma") + ylab("Min MAP (Continous)")
+
+kruskal.test(patient_summary$MAP_q0, patient_summary$asthma)
+```
+
+
+```{r}
+ggplot(data=patient_summary %>% filter(!is.na(asthma))) + geom_boxplot(aes(y=minMAP, x=as.factor(asthma))) + xlab("Asthma") + ylab("Min MAP (Nurse)")
+
+kruskal.test(patient_summary$minMAP, patient_summary$asthma)
+```
+
+
+```{r}
+ggplot(data=patient_summary %>% filter(!is.na(BMIHIGH))) + geom_boxplot(aes(y=mino2, x=as.factor(BMIHIGH))) + xlab("BMI>30") + ylab("Min Oxygenation (Nurse)")
+
+kruskal.test(patient_summary$mino2, patient_summary$BMIHIGH)
+```
+
+```{r}
+
+ggplot(data=patient_summary) + geom_point(aes(y=o2_q0, x=stay_hrs)) + xlab("Stay (hrs)") + ylab("Min SPO2 (Continuous)")
+ggplot(data=patient_summary) + geom_point(aes(y=mino2, x=stay_hrs))
+ggplot(data=patient_summary) + geom_point(aes(y=minMAP, x=stay_hrs))
+ggplot(data=patient_summary) + geom_point(aes(y=MAP_q0, x=stay_hrs))
+ggplot(data=patient_summary) + geom_point(aes(y=age, x=stay_hrs))+ xlab("Stay (hrs)") + ylab("Age")
+
+ggplot(data=patient_summary) + geom_point(aes(y=bmi, x=stay_hrs))+ xlab("Stay (hrs)") + ylab("BMI")
+
+
+```
+
+```{r}
+
+
+ggpairs(patient_summary %>% 
+          select(stay_hrs, map_outlier, o2_outlier, PR_q0, age, bmi,
+                 minMAP,mino2) %>% 
+          mutate(across(c( stay_hrs, age, bmi,
+                          minMAP,mino2),as.numeric)))
+```
+
+```{r}
+ggpairs(patient_summary  %>% 
+          select(stay_hrs, age, bmi,
+                 o2_q0,mino2,minMAP, MAP_q0, `Duration of surgery (hours)`, pacu_los_hr, gender) %>% 
+          mutate(across(c(stay_hrs, age, bmi,
+                          mino2,minMAP, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)) %>% filter(`Duration of surgery (hours)`<20) %>% filter(pacu_los_hr<20), ggplot2::aes(colour=gender))
+
+
+```
+
+```{r}
+states <- c("high", "low", "critical")
+nstates = 2
+data = monitor_v %>% filter(Study.ID=="376-01-0095")
+HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
+HMM_fm <- fit(HMM_model)
+
+summary(HMM_fm)
+
+probs = posterior(HMM_fm)
+
+summary(probs)
+
+plot(data$SPO2, col=probs$state)
+```
+
+```{r}
+for (i in unique(monitor_v$Study.ID)[1:10]){
+  data = monitor_v %>% filter(Study.ID==i)
+  HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
+  HMM_fm <- fit(HMM_model)
+  probs = posterior(HMM_fm)
+  data$state = probs$state
+  plot = ggplot(aes(x=time, y=SPO2, colour=as.factor(state)), data=data)+ geom_point()
+  ggsave(filename = paste0(i,"spo2.png"), plot=plot)}
+```
+
+
+```{r}
+model1=glm(formula = stay_hrs ~ mino2 +MAP_q0+o2_q0+o2_outlier + map_outlier + bmi+o2_q50+`Duration of surgery (hours)`+pacu_los_hr, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi,
+                          mino2, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)))
+
+
+summary(model1)
+```
+
+```{r}
+glm(formula = stay_hrs ~ MAP_q0+ o2_q0 + age + bmi+gender, data = patient_summary %>% mutate(stay_hrs = as.numeric(stay_hrs)))
+```
+
+```{r}
+
+ggpairs(patient_summary %>% 
+          select(o2_q0, o2_q25, stay_hrs, age, bmi,mino2, smoking_status, gender, race) %>% 
+          filter(!is.na(smoking_status), !is.na(race)) %>%
+          mutate(across(c(o2_q0, o2_q25, 
+                          stay_hrs, age, bmi, mino2),as.numeric)) %>% mutate(race2=race==1) %>% 
+          mutate(across(c(gender, smoking_status, race), as.factor)) %>% select(-race), ggplot2::aes(colour=race2))
 ```
