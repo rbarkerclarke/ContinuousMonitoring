@@ -247,11 +247,17 @@ for (i in patient_summary$Study.ID){
 ```
 
 ```{r}
-model1=glm(formula = stay_hrs ~ mino2 +MAP_q0+o2_q0+o2_outlier + map_outlier + bmi+o2_q50+T1+T2+T3+`Duration of surgery (hours)`+pacu_los_hr, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi,
-                          mino2, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)))
+model1=glm(formula = asa ~ o2_q0 + o2_outlier + map_outlier+ MAP_q0+PR_q50+T1+age+bmi, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi,
+                          mino2, MAP_q0),as.numeric)))
+model2=glm(formula = asa ~ age+ bmi, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi, mino2, MAP_q0),as.numeric)))
 
 
-summary(model1)
+myroc <- pROC::roc(patient_summary$asa,predict(model1, patient_summary %>% mutate(across(c(stay_hrs, age, bmi,mino2, MAP_q0),as.numeric)), type = "response")) 
+myroc2 <- pROC::roc(patient_summary$asa,predict(model2, patient_summary %>% mutate(across(c(stay_hrs, age, bmi,mino2, MAP_q0),as.numeric)), type = "response")) 
+
+plot(myroc)
+plot(myroc2, add=TRUE)
+
 ```
 
 ```{r}
