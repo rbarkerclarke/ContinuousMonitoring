@@ -1,11 +1,15 @@
 ---
+
+---
 title: "Sotera"
 format: html
 editor: visual
 ---
 
-```{r}
+```{r setup}
 library(tidyverse)
+library(GGally)
+knitr::opts_knit$set(root.dir = "/Users/barkerr7/Documents/Projects/Sotera-Sessler/SesslerClinicMonitoring/OneDrive_1_4-29-2024")
 ```
 
 ## Sotera Visi Analysis
@@ -16,16 +20,16 @@ Continuous Heart Rate and SPO2 Monitoring in post-surgical patients
 
 ```{r load_data}
 # Run clinical data file generator
+folder=getwd()
+source(paste0(folder,"/30037614241CRFV21FAC_R_2024-04-24_0737.r"))
 
-#source("./data_request_20240423/30037614241CRFV21FAC_R_2024-04-24_0737.r")
-
-baseline= read.csv(file='./data_request_20240423/baseline_20190121.csv')
-Finalstudy =  read_csv(file='./data_request_20240423/Final_study_pop_20190107.csv')
+baseline= read.csv(file='./baseline_20190121.csv')
+Finalstudy =  read_csv(file='./Final_study_pop_20190107.csv')
 
 # DO NOT USE read_csv for this file
-monitoring = read.csv("./data_request_20240423/all_factor_visi_data.csv")
+monitoring = read.csv("./all_factor_visi_data.csv")
 
-intra_op = read_csv("./data_request_20240423/intraop_20190121.csv")
+intra_op = read_csv("./intraop_20190121.csv")
 ```
 
 ```{r}
@@ -34,11 +38,9 @@ monitoring <- monitoring %>% mutate(across(c(SPO2, PR, RR, CNIBP_SYS,CNIBP_DIA, 
 ```
 
 ```{r}
-jama_p=read_csv("./data_request_20240423/primary_outcomes_jama_revision.csv")
-jama_s =read_csv("./data_request_20240423/secondary_outcomes_20190211.csv")
+jama_p=read_csv("./primary_outcomes_jama_revision.csv")
+jama_s =read_csv("./secondary_outcomes_20190211.csv")
 ```
-
-
 
 Subset data into continuous (visi) and nurse observations
 
@@ -65,6 +67,7 @@ patient_summary$randomization_number = as.integer(str_replace_all(patient_summar
 
 patient_summary = left_join(patient_summary, baseline)
 ```
+
 ```{r}
 intra_op_specific = intra_op %>% select(randomization_number,`Duration of surgery (hours)`, pacu_los_hr, `Type of Surgery`)
 
@@ -123,13 +126,11 @@ ggplot(data=patient_summary %>% filter(!is.na(asthma))) + geom_boxplot(aes(y=MAP
 kruskal.test(patient_summary$MAP_q0, patient_summary$asthma)
 ```
 
-
 ```{r}
 ggplot(data=patient_summary %>% filter(!is.na(asthma))) + geom_boxplot(aes(y=minMAP, x=as.factor(asthma))) + xlab("Asthma") + ylab("Min MAP (Nurse)")
 
 kruskal.test(patient_summary$minMAP, patient_summary$asthma)
 ```
-
 
 ```{r}
 ggplot(data=patient_summary %>% filter(!is.na(BMIHIGH))) + geom_boxplot(aes(y=mino2, x=as.factor(BMIHIGH))) + xlab("BMI>30") + ylab("Min Oxygenation (Nurse)")
@@ -161,11 +162,12 @@ ggpairs(patient_summary %>%
 ```
 
 ```{r}
+library(GGally)
 ggpairs(patient_summary  %>% 
           select(stay_hrs, age, bmi,
                  o2_q0,mino2,minMAP, MAP_q0, `Duration of surgery (hours)`, pacu_los_hr, gender) %>% 
           mutate(across(c(stay_hrs, age, bmi,
-                          mino2,minMAP, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)) %>% filter(`Duration of surgery (hours)`<20) %>% filter(pacu_los_hr<20), ggplot2::aes(colour=gender))
+                          mino2,minMAP, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)) %>% filter(`Duration of surgery (hours)`<20) %>% filter(pacu_los_hr<20), ggplot2::aes(hue=gender))
 
 
 ```
@@ -175,11 +177,11 @@ states <- c("high", "low", "critical")
 nstates = 2
 data = monitor_v %>% filter(Study.ID=="376-01-0095")
 HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
-HMM_fm <- fit(HMM_model)
+HMM_fm <- depmixS4::fit(HMM_model)
 
 summary(HMM_fm)
 
-probs = posterior(HMM_fm)
+probs =depmixS4::posterior(HMM_fm)
 
 summary(probs)
 
@@ -187,19 +189,65 @@ plot(data$SPO2, col=probs$state)
 ```
 
 ```{r}
-for (i in unique(monitor_v$Study.ID)[1:10]){
-  data = monitor_v %>% filter(Study.ID==i)
-  HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
-  HMM_fm <- fit(HMM_model)
-  probs = posterior(HMM_fm)
-  data$state = probs$state
-  plot = ggplot(aes(x=time, y=SPO2, colour=as.factor(state)), data=data)+ geom_point()
-  ggsave(filename = paste0(i,"spo2.png"), plot=plot)}
+i=63
+data = monitor_v %>% filter(Study.ID==i)
+HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
+HMM_fm <- depmixS4::fit(HMM_model)
+probs = depmixS4::posterior(HMM_fm)
+params = depmixS4::getpars(HMM_fm)
+
 ```
 
+```{r}
+patient_summary$T1 = 0
+patient_summary$T2 = 0
+patient_summary$T3 = 0
+```
 
 ```{r}
-model1=glm(formula = stay_hrs ~ mino2 +MAP_q0+o2_q0+o2_outlier + map_outlier + bmi+o2_q50+`Duration of surgery (hours)`+pacu_los_hr, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi,
+
+for (i in 1:length(patient_summary$Study.ID)){
+  print(i)
+  data = monitor_v %>% filter(Study.ID==patient_summary$Study.ID[i])
+  HMM_model <- depmixS4::depmix(data$SPO2~1, nstates=3, ntimes=length(data$SPO2))
+  if (length(data$SPO2)>0){
+    HMM_fm <- depmixS4::fit(HMM_model)
+    probs = depmixS4::posterior(HMM_fm)
+    params = depmixS4::getpars(HMM_fm)
+  }
+  else{
+    params=c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+  }
+  patient_summary$T1[i] = params[4]
+  patient_summary$T2[i] = params[8]
+  patient_summary$T3[i] = params[12]
+}
+```
+
+```{r}
+correlations_HRBP = c()
+correlations_RRO2 = c()
+for (i in patient_summary$Study.ID){
+  #print(i)
+  data = monitor_v %>% filter(Study.ID==i)
+  #plot = ggplot(aes(x=HR, y=CNIBP_MAP), data=data)+ geom_point()
+  #ggsave(filename = paste0(i,"cor.png"), plot=plot)
+  if (){
+    valHRBP=cor.test(data$PR, data$CNIBP_MAP)
+    valRRO2=cor.test(data$PR, data$SPO2)
+    correlations_HRBP = c(correlations_HRBP, valHRBP$estimate)
+    correlations_RRO2 = c(correlations_RRO2, valRRO2$estimate)
+  }
+  else{
+    correlations_HRBP = c(correlations_HRBP, NA)
+    correlations_RRO2 = c(correlations_RRO2, NA)
+  }
+
+  }
+```
+
+```{r}
+model1=glm(formula = stay_hrs ~ mino2 +MAP_q0+o2_q0+o2_outlier + map_outlier + bmi+o2_q50+T1+T2+T3+`Duration of surgery (hours)`+pacu_los_hr, data = patient_summary %>% mutate(across(c(stay_hrs, age, bmi,
                           mino2, MAP_q0,`Duration of surgery (hours)`,pacu_los_hr),as.numeric)))
 
 
@@ -207,8 +255,10 @@ summary(model1)
 ```
 
 ```{r}
-glm(formula = stay_hrs ~ MAP_q0+ o2_q0 + age + bmi+gender, data = patient_summary %>% mutate(stay_hrs = as.numeric(stay_hrs)))
+glm(formula = stay_hrs ~ MAP_q0+ o2_q0 +T1+ age + bmi+gender, data = patient_summary %>% mutate(stay_hrs = as.numeric(stay_hrs)))
 ```
+
+T
 
 ```{r}
 
@@ -216,6 +266,10 @@ ggpairs(patient_summary %>%
           select(o2_q0, o2_q25, stay_hrs, age, bmi,mino2, smoking_status, gender, race) %>% 
           filter(!is.na(smoking_status), !is.na(race)) %>%
           mutate(across(c(o2_q0, o2_q25, 
-                          stay_hrs, age, bmi, mino2),as.numeric)) %>% mutate(race2=race==1) %>% 
-          mutate(across(c(gender, smoking_status, race), as.factor)) %>% select(-race), ggplot2::aes(colour=race2))
+                          stay_hrs, age, bmi, mino2),as.numeric)) %>% 
+          mutate(across(c(gender, smoking_status), as.factor)), ggplot2::aes(colour=smoking_status))
+```
+
+```{r}
+patient_summary
 ```
